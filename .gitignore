@@ -88,21 +88,30 @@ composer.lock
 # two cannot drift apart again.
 phpunit.xml
 
-# ignore all the ai configuration files, have laravel boost manage them and the developer choose their setup
+# Laravel Boost writes agent tool configuration into the paths below. Which
+# agent a developer runs, and which parts of Boost they install for it, is that
+# developer's own setup. Keeping these out of the repository means nobody's
+# configuration is committed and nobody's is overwritten by anyone else's.
 .ai
 .agentic-tools-mcp
+.agents
 .claude
 .codex
 .cursor
+.factory
 .gemini
 .github/copilot-instructions.md
 .github/skills
+.grok
 .junie
+.kiro
 .mcp.json
 .opencode
+.zed
 .vscode/mcp.json
-AGENTS.md
-CLAUDE.md
-GEMINI.md
 boost.json
+GEMINI.md
 opencode.json
+/bootstrap
+/storage
+/.dev-settings-boost

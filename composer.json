@@ -12,6 +12,15 @@
         "genealabs/laravel-model-caching": "self.version",
         "mikebronner/laravel-model-caching": "self.version"
     },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "git@github.com:mikebronner/development-settings.git",
+            "only": [
+                "mikebronner/development-settings"
+            ]
+        }
+    ],
     "require": {
         "php": ">=8.2",
         "mikebronner/laravel-pivot-events": "^13.1",
@@ -30,6 +39,7 @@
         "larastan/larastan": "^2.0|^3.0",
         "laravel/boost": "^2.0",
         "laravel/pint": "^1.27",
+        "mikebronner/development-settings": "^0.2.0",
         "orchestra/testbench": "^10.0|^11.0",
         "phpunit/phpunit": "^11.5|^12.5",
         "predis/predis": "^2.0|^3.0",
@@ -68,13 +78,14 @@
         "test": "phpunit --configuration phpunit.xml.dist --testsuite Integration,Feature"
     },
     "scripts-descriptions": {
-        "analyse": "Run PHPStan at level 5. Enforced in CI on every pull request. The 970 pre-existing findings are recorded in phpstan-baseline.neon, so a clean run means you introduced nothing new.",
+        "analyse": "Run PHPStan at level 5. Enforced in CI on every pull request. The pre-existing findings are recorded in phpstan-baseline.neon, so a clean run means you introduced nothing new.",
         "test": "Run the test suite the way CI runs it. Requires a reachable Redis."
     },
     "config": {
         "allow-plugins": {
             "symfony/thanks": true,
-            "dealerdirect/phpcodesniffer-composer-installer": true
+            "dealerdirect/phpcodesniffer-composer-installer": true,
+            "mikebronner/development-settings": true
         }
     }
 }

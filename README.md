@@ -493,7 +493,7 @@ PHPStan cannot infer the custom methods from the `CachedBuilder` return type.
 Add a `@return` override annotation on your model's `newEloquentBuilder()`
 method, or add `@mixin YourCustomBuilder` to the model class.
 
-The package's own source carries 970 level-5 findings, recorded in
+The package's own source carries pre-existing level-5 findings, recorded in
 `phpstan-baseline.neon` so CI can enforce the level from here on. That baseline
 is internal to this repository and does not affect analysis of your project,
 because your own `phpstan.neon` decides which paths are analysed and `vendor/`
