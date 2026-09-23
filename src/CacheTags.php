@@ -6,7 +6,10 @@ namespace GeneaLabs\LaravelModelCaching;
 
 use GeneaLabs\LaravelModelCaching\Traits\CachePrefixing;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\MorphPivot;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Illuminate\Database\Eloquent\Relations\Pivot;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Str;
 use SplObjectStorage;
@@ -48,8 +51,11 @@ class CacheTags
 
                 $relatedModel = $relation->getQuery()->getModel();
 
-                return [$this->getCachePrefixForModel($relatedModel)
-                    . Str::slug($relatedModel::class)];
+                return [
+                    $this->getCachePrefixForModel($relatedModel)
+                        . Str::slug($relatedModel::class),
+                    $this->getPivotTableTag($relation),
+                ];
             })
             ->filter()
             ->unique()
@@ -65,6 +71,30 @@ class CacheTags
             ->unique()
             ->values()
             ->toArray();
+    }
+
+    // An eager-loaded many-to-many relation is cached inside the parent
+    // query's entry, so that entry must also carry the pivot table's tag.
+    // Without it, a pivot row written outside the relation's own attach/sync
+    // methods (a pivot model, or a cachable model on the pivot table) never
+    // invalidates the entry and the new member stays missing.
+    //
+    // The prefix comes from the model that owns the pivot table, so the tag
+    // matches the one that model's own write flushes: the custom pivot class
+    // when the relation declares one, otherwise the relation's parent.
+    protected function getPivotTableTag(Relation $relation): ?string
+    {
+        if (! $relation instanceof BelongsToMany) {
+            return null;
+        }
+
+        $pivotClass = $relation->getPivotClass();
+        $owner = in_array($pivotClass, [Pivot::class, MorphPivot::class], true)
+            ? $relation->getParent()
+            : new $pivotClass;
+
+        return $this->getCachePrefixForModel($owner)
+            . Str::slug($this->stripTableAlias($relation->getTable()));
     }
 
     protected function resolveBaseQuery(): mixed
