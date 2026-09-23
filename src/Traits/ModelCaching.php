@@ -23,6 +23,8 @@ trait ModelCaching
     // phpcs:ignore SlevomatCodingStandard.TypeHints.ParameterTypeHint.MissingAnyTypeHint,SlevomatCodingStandard.TypeHints.ReturnTypeHint.MissingAnyTypeHint
     public function newEloquentBuilder($query)
     {
+        $query = $this->useModelCachingQueryBuilder($query);
+
         static $building = [];
         $objectId = spl_object_id($this);
 
@@ -48,21 +50,23 @@ trait ModelCaching
      * its own base query builder keeps it. Recording one more table to tag is
      * worth far less than silently replacing a builder someone else depends on,
      * so the swap only happens when the builder is Laravel's own.
+     *
+     * This deliberately does not override newBaseQueryBuilder(). Other packages
+     * override that method in a trait too (staudenmeir/laravel-cte's
+     * QueriesExpressions is one), and a model using both traits would fail to
+     * compile with a trait method collision. newEloquentBuilder() is already
+     * this trait's own override, so doing the swap here adds no new one.
      */
-    // phpcs:ignore SlevomatCodingStandard.TypeHints.ReturnTypeHint.MissingAnyTypeHint
-    protected function newBaseQueryBuilder()
+    protected function useModelCachingQueryBuilder(mixed $query): mixed
     {
-        $builder = parent::newBaseQueryBuilder();
-
-        if ($builder::class !== QueryBuilder::class) {
-            return $builder;
+        if (
+            ! is_object($query)
+            || $query::class !== QueryBuilder::class
+        ) {
+            return $query;
         }
 
-        return new CachedQueryBuilder(
-            $builder->getConnection(),
-            $builder->getGrammar(),
-            $builder->getProcessor(),
-        );
+        return CachedQueryBuilder::fromBase($query);
     }
 
     public function __get($key)
