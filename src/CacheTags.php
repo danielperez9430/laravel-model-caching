@@ -7,9 +7,7 @@ namespace GeneaLabs\LaravelModelCaching;
 use GeneaLabs\LaravelModelCaching\Traits\CachePrefixing;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\Relations\MorphPivot;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
-use Illuminate\Database\Eloquent\Relations\Pivot;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Str;
 use SplObjectStorage;
@@ -54,7 +52,7 @@ class CacheTags
                 return [
                     $this->getCachePrefixForModel($relatedModel)
                         . Str::slug($relatedModel::class),
-                    $this->getPivotTableTag($relation),
+                    ...$this->getPivotTableTags($relation),
                 ];
             })
             ->filter()
@@ -79,22 +77,31 @@ class CacheTags
     // methods (a pivot model, or a cachable model on the pivot table) never
     // invalidates the entry and the new member stays missing.
     //
-    // The prefix comes from the model that owns the pivot table, so the tag
-    // matches the one that model's own write flushes: the custom pivot class
-    // when the relation declares one, otherwise the relation's parent.
-    protected function getPivotTableTag(Relation $relation): ?string
+    // A tag only works if it is spelled the way the writer flushes it, and
+    // the writer is not known here, so the table is tagged under each prefix
+    // a pivot-table write can flush:
+    //
+    // - the pivot Laravel builds for this relation, which carries the
+    //   parent's connection and, for a custom pivot class, that class's own
+    //   $cachePrefix. A pivot saved or deleted through the relation flushes
+    //   exactly this. For a plain Pivot it has no $cachePrefix, which is also
+    //   what a cachable model mapped to the pivot table usually flushes;
+    // - the relation's parent, for a writer that shares the parent's prefix.
+    //
+    // CachedBelongsToMany adds the same tags to the relation's own query,
+    // whose entry the rebuilt parent entry reads its related models from.
+    public function getPivotTableTags(Relation $relation): array
     {
         if (! $relation instanceof BelongsToMany) {
-            return null;
+            return [];
         }
 
-        $pivotClass = $relation->getPivotClass();
-        $owner = in_array($pivotClass, [Pivot::class, MorphPivot::class], true)
-            ? $relation->getParent()
-            : new $pivotClass;
+        $table = Str::slug($this->stripTableAlias($relation->getTable()));
 
-        return $this->getCachePrefixForModel($owner)
-            . Str::slug($this->stripTableAlias($relation->getTable()));
+        return array_values(array_unique([
+            $this->getCachePrefixForModel($relation->newPivot()) . $table,
+            $this->getCachePrefixForModel($relation->getParent()) . $table,
+        ]));
     }
 
     protected function resolveBaseQuery(): mixed

@@ -54,6 +54,14 @@ class GroupUsersEagerLoadTest extends TestCase
             'database' => ':memory:',
             'prefix' => '',
         ]);
+        // Same settings under a second name. The cross-connection test points
+        // it at the testing connection's PDO, so both names see the same data
+        // but key their cache under different prefixes.
+        $app['config']->set('database.connections.tenant', [
+            'driver' => 'sqlite',
+            'database' => ':memory:',
+            'prefix' => '',
+        ]);
         $app['config']->set('cache.default', 'array');
         $app['config']->set('laravel-model-caching.store', 'array');
         $app['config']->set('laravel-model-caching.enabled', true);
@@ -355,16 +363,87 @@ class GroupUsersEagerLoadTest extends TestCase
 
     // The eager-loaded users are cached inside the Group query's entry, so
     // that entry is only invalidated through its own tags. A write to the
-    // pivot table can only reach it through a pivot-table tag.
+    // pivot table can only reach it through a pivot-table tag, and only if
+    // the tag's prefix is the one the writer flushes, so the whole tag list
+    // is asserted, not just a suffix.
     public function testEagerLoadedBelongsToManyTagsIncludeThePivotTable(): void
     {
         $builder = WorkspaceGroup::with(['users'])->where('workspace_id', self::WORKSPACE_ID);
         $tags = (fn () => $this->makeCacheTags())->call($builder);
 
-        $this->assertNotEmpty(
-            array_filter($tags, fn (string $tag) => str_ends_with($tag, ':lmc-group-user')),
-            'No pivot-table tag. Cache tags were: ' . implode(', ', $tags),
+        $this->assertSame(
+            [
+                'genealabs:laravel-model-caching:testing::memory::genealabslaravelmodelcachingtestsintegrationworkspacegroup',
+                'genealabs:laravel-model-caching:testing::memory::genealabslaravelmodelcachingtestsintegrationworkspaceuser',
+                'genealabs:laravel-model-caching:testing::memory::lmc-group-user',
+                'genealabs:laravel-model-caching:testing::memory::lmc-workspace-groups',
+            ],
+            $tags,
         );
+    }
+
+    // Compares the eager-loaded membership of any group model on the pivot
+    // table with the pivot table itself.
+    private function assertGroupsMatchDatabase(string $groupClass): void
+    {
+        $cached = $groupClass::with(['users'])
+            ->where('workspace_id', self::WORKSPACE_ID)
+            ->get()
+            ->mapWithKeys(fn (Model $group) => [
+                $group->id => $group->users->pluck('id')->sort()->values()->all(),
+            ])
+            ->sortKeys()
+            ->all();
+
+        $this->assertSame($this->databaseMembership(), $cached);
+    }
+
+    // The parent declares its own $cachePrefix, the cachable model on the
+    // pivot table does not. The pivot tag must still be one that model's
+    // write flushes.
+    public function testPivotModelWriteReachesAParentWithItsOwnCachePrefix(): void
+    {
+        $this->assertGroupsMatchDatabase(PrefixedWorkspaceGroup::class);
+
+        $group = $this->lastGroup();
+        CachableGroupUser::create(['group_id' => $group->id, 'user_id' => $this->userNotInGroup($group)->id]);
+
+        $this->assertGroupsMatchDatabase(PrefixedWorkspaceGroup::class);
+    }
+
+    // The related model declares its own $cachePrefix. The eager-load query
+    // for it has its own entry, tagged with the pivot table through the join,
+    // and the rebuilt parent entry reads from it, so that tag has to be
+    // reachable by the pivot write too.
+    public function testPivotModelWriteReachesRelatedModelsWithTheirOwnCachePrefix(): void
+    {
+        $this->assertGroupsMatchDatabase(GroupWithPrefixedUsers::class);
+
+        $group = $this->lastGroup();
+        CachableGroupUser::create(['group_id' => $group->id, 'user_id' => $this->userNotInGroup($group)->id]);
+
+        $this->assertGroupsMatchDatabase(GroupWithPrefixedUsers::class);
+    }
+
+    // The parent lives on another connection. Laravel creates the relation's
+    // pivots on the parent's connection, so a pivot deleted through the
+    // relation flushes a tag under that connection, not the default one.
+    public function testPivotDeletedThroughTheRelationReachesAParentOnAnotherConnection(): void
+    {
+        DB::connection('tenant')->setPdo(DB::connection('testing')->getPdo());
+
+        $this->assertGroupsMatchDatabase(TenantWorkspaceGroup::class);
+
+        TenantWorkspaceGroup::with(['users'])
+            ->where('workspace_id', self::WORKSPACE_ID)
+            ->orderByDesc('id')
+            ->first()
+            ->users
+            ->first()
+            ->pivot
+            ->delete();
+
+        $this->assertGroupsMatchDatabase(TenantWorkspaceGroup::class);
     }
 
     public function testRepeatedlyAddingUsersKeepsShowingUp(): void
@@ -446,4 +525,62 @@ class UncachedGroupUser extends Model
     protected $table = 'lmc_group_user';
 
     protected $fillable = ['group_id', 'user_id'];
+}
+
+class PrefixedWorkspaceGroup extends Model
+{
+    use Cachable;
+
+    protected $cachePrefix = 'groups';
+
+    protected $table = 'lmc_workspace_groups';
+
+    protected $fillable = ['workspace_id', 'name'];
+
+    public function users(): BelongsToMany
+    {
+        return $this->belongsToMany(WorkspaceUser::class, 'lmc_group_user', 'group_id', 'user_id');
+    }
+}
+
+class PrefixedWorkspaceUser extends Model
+{
+    use Cachable;
+
+    protected $cachePrefix = 'users';
+
+    protected $table = 'lmc_workspace_users';
+
+    protected $fillable = ['name'];
+}
+
+class GroupWithPrefixedUsers extends Model
+{
+    use Cachable;
+
+    protected $table = 'lmc_workspace_groups';
+
+    protected $fillable = ['workspace_id', 'name'];
+
+    public function users(): BelongsToMany
+    {
+        return $this->belongsToMany(PrefixedWorkspaceUser::class, 'lmc_group_user', 'group_id', 'user_id');
+    }
+}
+
+class TenantWorkspaceGroup extends Model
+{
+    use Cachable;
+
+    protected $connection = 'tenant';
+
+    protected $table = 'lmc_workspace_groups';
+
+    protected $fillable = ['workspace_id', 'name'];
+
+    public function users(): BelongsToMany
+    {
+        return $this->belongsToMany(WorkspaceUser::class, 'lmc_group_user', 'group_id', 'user_id')
+            ->using(CachableGroupUserPivot::class);
+    }
 }
