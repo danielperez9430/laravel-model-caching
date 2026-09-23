@@ -23,8 +23,6 @@ trait ModelCaching
     // phpcs:ignore SlevomatCodingStandard.TypeHints.ParameterTypeHint.MissingAnyTypeHint,SlevomatCodingStandard.TypeHints.ReturnTypeHint.MissingAnyTypeHint
     public function newEloquentBuilder($query)
     {
-        $query = $this->useModelCachingQueryBuilder($query);
-
         static $building = [];
         $objectId = spl_object_id($this);
 
@@ -54,8 +52,8 @@ trait ModelCaching
      * This deliberately does not override newBaseQueryBuilder(). Other packages
      * override that method in a trait too (staudenmeir/laravel-cte's
      * QueriesExpressions is one), and a model using both traits would fail to
-     * compile with a trait method collision. newEloquentBuilder() is already
-     * this trait's own override, so doing the swap here adds no new one.
+     * compile with a trait method collision. newModelCachingEloquentBuilder()
+     * is this package's own method, so doing the swap there adds no new one.
      */
     protected function useModelCachingQueryBuilder(mixed $query): mixed
     {
@@ -205,6 +203,11 @@ trait ModelCaching
      */
     public function newModelCachingEloquentBuilder($query)
     {
+        // Done here rather than in newEloquentBuilder() so a model that
+        // resolves a newEloquentBuilder() collision by delegating to this
+        // method still gets the recording query builder.
+        $query = $this->useModelCachingQueryBuilder($query);
+
         if (! $this->isCachable()) {
             $this->isCachable = false;
 
