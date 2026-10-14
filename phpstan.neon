@@ -1,6 +1,6 @@
 includes:
     - vendor/larastan/larastan/extension.neon
-    # 970 pre-existing level-5 findings, recorded so CI can enforce the level
+    # Pre-existing level-5 findings, recorded so CI can enforce the level
     # from here on. The baseline is a debt ledger, not a permission: fix the
     # entries you touch and delete their lines. Regenerate with
     # `vendor/bin/phpstan analyse --generate-baseline=phpstan-baseline.neon`.
@@ -11,6 +11,9 @@ parameters:
     paths:
         - src/
         - tests/Fixtures/
+    excludePaths:
+        - tests/Fixtures/AuthorWithBaseBuilderTrait.php
+        - tests/Fixtures/Concerns/DefinesBaseQueryBuilder.php
     # composer.lock is not committed, so CI resolves its own dependency set and
     # the findings can shift under it. Without this, a baseline entry that
     # stops matching is itself an error, and CI goes red for a finding that

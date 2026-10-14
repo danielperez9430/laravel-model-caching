@@ -30,7 +30,7 @@ deleted the relevant cache entries are flushed for you.
 
 ⚡ Typical performance improvements range from 100–900% reduction in database
 queries on read-heavy pages. 🧪 Backed by 335+ integration tests across PHP
-8.2–8.5 and Laravel 12–13.
+8.3–8.5 and Laravel 12–13.
 
 **Use this package when** your application makes many repeated Eloquent queries
 and you want a drop-in caching layer that stays in sync with your data without
@@ -79,8 +79,10 @@ $posts = Post::where('active', true)->with('comments')->paginate();
 | Database | ❌ |
 
 ### 📋 Requirements
-- PHP 8.2+
+- PHP 8.3+
 - Laravel 12 or 13
+- PHP 8.6 needs Laravel 13. Laravel 12 does not support PHP 8.6, because its
+  session handler fails there. Laravel 13 fixes it.
 
 ## 📦 Installation
 ```
@@ -183,6 +185,7 @@ return [
 | `MODEL_CACHE_STORE` | `null` | 💾 Cache store name from `config/cache.php`. Uses the default store when not set. |
 | `MODEL_CACHE_USE_DATABASE_KEYING` | `true` | 🔑 Include database connection and name in cache keys. Important for multi-tenant or multi-database apps. |
 | `MODEL_CACHE_FALLBACK_TO_DB` | `false` | 🛡️ When `true`, falls back to direct database queries if the cache backend is unavailable (e.g. Redis is down) instead of throwing an exception. |
+| `MODEL_CACHE_TTL` | `null` | ⏰ Global cache expiration in whole seconds. Unset, empty or `0` means cache forever. Any other value that is not a whole number of seconds throws an exception. See [Cache Expiration (TTL)](#-cache-expiration-ttl) — a per-model `$cacheTtlSeconds` overrides this. |
 
 > **📝 Note:** The `cache-prefix` option is set directly in the config file (not via
 > an environment variable). For dynamic prefixes (e.g. multi-tenant), use the
@@ -251,11 +254,16 @@ expiration instead of a truly unbounded item. In current Laravel releases that
 window is several years, which means stale DynamoDB rows are bounded but can
 linger for a long time after invalidation.
 
+When a query resolves a TTL (see [Cache Expiration (TTL)](#-cache-expiration-ttl)),
+its row gets that expiration instead. Laravel stops serving the row once the
+expiration passes, even before DynamoDB's TTL process deletes it.
+
 Practical guidance:
-- Always enable TTL on `expires_at`.
+- Always enable TTL on `expires_at`. Without it, DynamoDB never deletes expired or invalidated rows.
 - Treat DynamoDB cache invalidation as logical invalidation first and physical cleanup later.
 - Expect dead query rows to accumulate temporarily on write-heavy or high-churn models.
-- If you need faster physical cleanup than Laravel's long-lived cache TTL allows, Redis is usually a better fit.
+- Set a model cache TTL if you want invalidated query rows to become eligible for deletion sooner than Laravel's long-lived forever expiration.
+- If you need faster physical cleanup than DynamoDB's TTL process gives, Redis is usually a better fit.
 
 #### Operational notes
 - Namespace control keys do not grow without bound. The package stores one global namespace key plus one key per normalized tag hash.
@@ -330,6 +338,16 @@ ModelCache::runDisabled(function () {
 });
 ```
 
+`runDisabled()` restores the setting when the closure returns or throws.
+Writes inside the closure do not invalidate anything, on purpose, and
+`flushCache()` does nothing there either. Invalidate after the closure
+returns:
+
+```php
+ModelCache::runDisabled(fn () => MyModel::whereKey($id)->update($changes));
+ModelCache::invalidate(MyModel::class);
+```
+
 > **💡 Tip:** Use option 1 in seeders to avoid pulling stale cached data during
 > reseeds.
 
@@ -368,9 +386,18 @@ Comment::withCacheCooldownSeconds()->get();
 Comment::withCacheCooldownSeconds(30)->get();
 ```
 
-Once activated, writes during the cool-down window will not flush the cache.
-After the window expires, the next write triggers a flush and re-warms the
-cache. 🔄
+Once activated, writes during the cool-down window do not flush the cache.
+That covers model events, `destroy()`, pivot operations and every builder
+write in the *Cache Invalidation* table, `increment()` included. An explicit
+`flushCache()` or `ModelCache::invalidate()`, and a write through a different
+model class on the same table, still flush, because the window belongs to one
+model class. A model that declares `$cachePrefix` keeps its window under that
+prefix, and every write checks it there, pivot writes included, whatever prefix
+the other model declares.
+
+After the window expires, the next cached read of the model flushes its cache
+and ends the window, even if no write comes first. A write after expiry
+flushes as well. 🔄
 
 ### 🛡️ Graceful Fallback
 When enabled, if the cache backend (e.g. Redis) is unavailable the package logs
@@ -391,13 +418,47 @@ Cache is automatically flushed when:
 | Model deleted | Flush only if rows were actually deleted |
 | Model force-deleted | Flush only if rows were actually deleted |
 | Pivot `attach` / `detach` / `sync` / `updateExistingPivot` | Flush relationship cache |
-| `increment` / `decrement` | Flush model cache |
-| `insert` / `update` (builder) | Flush model cache |
+| `increment` / `decrement` / `incrementEach` / `decrementEach` | Flush model cache |
+| `insert` / `insertGetId` / `insertOrIgnore` / `insertOrIgnoreReturning` / `insertUsing` / `insertOrIgnoreUsing` (builder) | Flush model cache |
+| `update` / `upsert` / `updateOrInsert` / `updateFrom` / `touch` (builder) | Flush model cache |
 | `truncate` | Flush model cache |
+
+Builder writes flush with or without model events, so `saveQuietly()`,
+`deleteQuietly()` and `withoutEvents()` still invalidate. A write that skips the
+model's builder does not: `DB::table(...)`, or a base query builder taken with
+`toBase()` or `getQuery()`. Call `ModelCache::invalidate(Post::class)` after
+one of those.
 
 Cache tags are generated for the primary model, each eager-loaded relationship,
 joined tables, and morph-to target types, so only the relevant entries are
 invalidated. 🎯
+
+A subquery passed to `joinSub()`, `leftJoinSub()`, `rightJoinSub()`,
+`crossJoinSub()`, `straightJoinSub()`, `joinLateral()`, `leftJoinLateral()`,
+`fromSub()`, `whereIn()`, `orWhereIn()`, `whereNotIn()` or `orWhereNotIn()`
+tags the table it reads as well. That includes calls by named argument and
+calls made inside a `beforeQuery()` callback. `straightJoinSub()` exists on
+Laravel 13 only.
+
+For a model whose `newBaseQueryBuilder()` returns its own builder class, such
+as one from `staudenmeir/laravel-cte`, the tag is added for calls made through
+the model's query and for calls made inside a custom Eloquent builder's own
+methods. A subquery on such a model is not tagged in these cases:
+
+- It is added to the base builder directly, through `toBase()`, `getQuery()`
+  or a `beforeQuery()` callback.
+- A custom Eloquent builder defines its own method with one of those names,
+  calls it from another of its own methods, and that method does not call its
+  parent. A builder that extends `CachedBuilder` and defines one of those
+  methods without calling its parent is not tagged either.
+- A custom Eloquent builder registers a local macro with one of those names
+  and uses it inside the same method call.
+- A custom Eloquent builder calls one of those methods from its own methods in
+  a different letter case, such as `whereIN()`. Calls through the model's
+  query are matched in any letter case.
+
+After a write to that table, call `ModelCache::invalidate()` for the model that
+ran the query.
 
 Joined tables include the pivot or intermediate table of a `belongsToMany`,
 `morphToMany`, `hasManyThrough`, or `hasOneThrough` relationship. Writing rows
@@ -422,9 +483,9 @@ php artisan modelCache:clear
 ```
 
 > **ℹ️ Scope of the full clear (no `--model`)** — how much is removed depends on the cache driver:
-> - **Redis** (with a cache-store prefix) — only the model-cache keys are scanned and deleted; other keys on the same connection are left intact. This honors both the connection-level client prefix (`database.redis.options.prefix`) and the cache-store prefix, and works on the phpredis **and** Predis clients, single-node or cluster (`CROSSSLOT`-safe).
+> - **Redis** (any cache-store prefix, including none) — only this package's entries and cool-down keys are deleted, found through the `genealabs:laravel-model-caching:` prefix on every tag and cool-down key it writes. Every other key is left intact, including the application's own entries under the same store prefix. This honors both the connection-level client prefix (`database.redis.options.prefix`) and the cache-store prefix, and works on the phpredis **and** Predis clients, single-node or cluster (`CROSSSLOT`-safe).
 > - **DynamoDB** — rotates a package-wide namespace key; no destructive table scan (see the DynamoDB section).
-> - **Memcached, file, database, or un-prefixed Redis** — these cannot scope a clear by prefix, so the **entire** cache store is flushed. Give the model cache a dedicated store (see the *Custom Cache Store* section) so a full clear never touches unrelated data.
+> - **Memcached, file, database, or array** — these cannot scope a clear by prefix, so the **entire** cache store is flushed. Give the model cache a dedicated store (see the *Custom Cache Store* section) so a full clear never touches unrelated data.
 
 **🔧 Programmatic via Facade:**
 ```php
@@ -441,10 +502,88 @@ ModelCache::invalidate([
 ```
 
 ### ⏰ Cache Expiration (TTL)
-Cached queries are stored indefinitely (`rememberForever`) and rely on automatic
-invalidation (see above) to stay fresh. There is no per-query TTL option. If you
-need time-based expiry, use the cool-down period feature or flush the cache on a
-schedule via the Artisan command.
+Cached queries are stored indefinitely (`rememberForever`) by default and rely
+on automatic invalidation (see above) to stay fresh. This is the right choice
+for most applications — Redis and Memcached already manage stale-record
+eviction and memory usage on their own, so a blanket expiration setting isn't
+needed just to bound memory.
+
+TTL exists as an **opt-in** safety net for the different problem of data
+written outside Eloquent entirely — a script, a direct SQL statement, another
+process — where nothing ever calls `flushCache()` or the `modelCache:clear`
+Artisan command. For a model like that, an expiration bounds how long a stale
+read can persist, without you having to remember to invalidate manually on
+every external write.
+
+**Global TTL**, via config or environment variable, applies to every cachable
+model unless overridden:
+
+```
+MODEL_CACHE_TTL=86400
+```
+
+**Per-model TTL** overrides the global value for one model. It also works with
+no global TTL set at all:
+
+```php
+<?php
+
+namespace App\Models;
+
+use GeneaLabs\LaravelModelCaching\Traits\Cachable;
+use Illuminate\Database\Eloquent\Model;
+
+class ImportedProduct extends Model
+{
+    use Cachable;
+
+    protected $cacheTtlSeconds = 3600; // 1 hour ⏱️
+}
+```
+
+**Valid values.** Both levels follow the same rules:
+
+| Value | Meaning |
+| --- | --- |
+| not set, `null` or `''` | No TTL at this level. A model falls back to the global TTL. The global level means "cache forever". |
+| `0` or `'0'` | Global: no TTL, so cache forever. Per-model: opt this model out of the global TTL, so it caches forever. |
+| A positive integer, or a string of digits such as `'3600'` | Expire after that many seconds. |
+| Anything else | Rejected. Every query that resolves the value throws an `InvalidArgumentException` that names the model or the config key, and the value. This covers negative numbers, decimals such as `1.9`, strings such as `'60s'` or `'abc'`, and booleans such as `MODEL_CACHE_TTL=true`. |
+
+**Eager loads.** A cached query result holds its eager-loaded models too. So
+the query takes the shortest TTL among its root model and every model it eager
+loads, nested eager loads (`with('books.publisher')`) and `morphTo` targets
+included. Each of those models contributes its own TTL, or the global TTL when
+it sets none. A model that contributes no TTL does not lower the result, and a
+model opted out with `0` does not force the whole query to cache forever. For
+example, `Author::with('books')->get()` expires after 3600 seconds when `Book`
+sets `$cacheTtlSeconds = 3600`, even though `Author` sets no TTL. A query with
+no TTL at any level keeps the forever-cache behavior unchanged.
+
+`Model::all()` counts the relations in the model's default `$with` as eager
+loads, for both its TTL and its cache tags. So a cached `Author::all()` on an
+`Author` with `protected $with = ['books']` takes `Book`'s TTL, and an Eloquent
+write to a `Book` flushes it.
+
+> **⬆️ Upgrade note:** `all()` entries for models that declare `$with` now carry
+> the tags of those relations. Those entries read cold once after you upgrade,
+> then cache as before. No cache key or tag format changes.
+
+**Redis.** An expired item leaves its entry behind in each cache tag's set,
+because Laravel's Redis tag sets do not expire with the items. Schedule
+Laravel's `cache:prune-stale-tags` Artisan command to remove those entries, for
+example hourly:
+
+```php
+// routes/console.php
+use Illuminate\Support\Facades\Schedule;
+
+Schedule::command('cache:prune-stale-tags')->hourly();
+```
+
+TTL and the cool-down period above solve different problems and can be used
+together: cool-down debounces how often a *write* flushes the cache, while TTL
+bounds how long a value can live when nothing flushes it at all.
 
 ### 🧪 Testing
 In your test suite you can either disable model caching entirely or use the
@@ -470,30 +609,33 @@ store like Redis). No additional configuration is needed.
 
 ### 🔍 Static Analysis (Larastan / PHPStan)
 The package is compatible with [Larastan](https://github.com/larastan/larastan)
-at level 5 and above. Because the `Cachable` trait wraps Eloquent's builder,
-PHPStan may report "undefined method" errors for methods like `cache()` or
-`flushCache()` on your models. To resolve these, add a `@mixin` annotation to
-your cached model:
+at level 5 and above. With no annotation, the scopes `disableCache()` and
+`withCacheCooldownSeconds()` resolve anywhere in a query chain, and
+`flushCache()` resolves on a model instance.
+
+A query chain that ends in a `CachedBuilder` method does not. Larastan types
+`Post::where(...)` as Eloquent's own builder, so `->flushCache()` and
+`->cache()` on it are reported as undefined methods. `CachedBuilder` is not
+generic, so naming it as your model's builder type trades these errors for
+others: Larastan then no longer finds the scopes above, and query results lose
+their model type. Use the calls that resolve instead:
 
 ```php
-use GeneaLabs\LaravelModelCaching\Traits\Cachable;
-use Illuminate\Database\Eloquent\Model;
+use App\Models\Post;
+use GeneaLabs\LaravelModelCaching\Facades\ModelCache;
 
-/**
- * @mixin \GeneaLabs\LaravelModelCaching\CachedBuilder<\Illuminate\Database\Eloquent\Model>
- */
-class Post extends Model
-{
-    use Cachable;
-}
+(new Post)->flushCache();
+ModelCache::invalidate(Post::class);
 ```
 
-If you use a **custom Eloquent builder** that gets wrapped by `CachedBuilder`,
-PHPStan cannot infer the custom methods from the `CachedBuilder` return type.
-Add a `@return` override annotation on your model's `newEloquentBuilder()`
-method, or add `@mixin YourCustomBuilder` to the model class.
+Both are also safe with caching disabled, through `MODEL_CACHE_ENABLED=false`
+or inside `runDisabled()`: they do nothing there. A chained `flushCache()` or
+`cache()` is not. With caching disabled the model returns Eloquent's own
+builder, so the chained call throws `BadMethodCallException`. If you suppress
+the PHPStan error on a chain in your own project, that runtime case still
+applies.
 
-The package's own source carries 970 level-5 findings, recorded in
+The package's own source carries pre-existing level-5 findings, recorded in
 `phpstan-baseline.neon` so CI can enforce the level from here on. That baseline
 is internal to this repository and does not affect analysis of your project,
 because your own `phpstan.neon` decides which paths are analysed and `vendor/`
@@ -511,6 +653,14 @@ For breaking changes and upgrade instructions between versions, see the
 [Releases](https://github.com/GeneaLabs/laravel-model-caching/releases) page on
 GitHub.
 
+### PHP 8.2 support is dropped
+
+**PHP 8.2 is no longer supported.** Move to PHP 8.3 or later before you take
+this release. Composer refuses to install it on PHP 8.2.
+
+The `php` constraint and the CI matrix now start at PHP 8.3. No cache key,
+cache tag, or runtime behaviour changes.
+
 ### Laravel 11 support is dropped
 
 **Laravel 11 is no longer supported.** Move to Laravel 12 or 13 before you take
@@ -525,7 +675,7 @@ This removes leftover compatibility rather than introducing a break. The 13.0
 release already moved this package's major line. Laravel 11 was kept past it
 instead of being dropped at the time.
 
-PHP 8.2 is unaffected and stays supported. No cache key, cache tag, or runtime
+PHP 8.2 was unaffected by that release. No cache key, cache tag, or runtime
 behaviour changes.
 
 ### Carbon bindings are re-keyed once
