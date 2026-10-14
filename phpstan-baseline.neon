@@ -91,12 +91,6 @@ parameters:
 			path: src/CachedBelongsToMany.php
 
 		-
-			message: '#^Method GeneaLabs\\LaravelModelCaching\\CachedBelongsToMany\:\:attach\(\) with return type void returns mixed but should not return anything\.$#'
-			identifier: return.void
-			count: 1
-			path: src/CachedBelongsToMany.php
-
-		-
 			message: '#^Method Illuminate\\Database\\Eloquent\\Relations\\BelongsToMany\<Illuminate\\Database\\Eloquent\\Model,Illuminate\\Database\\Eloquent\\Model,Illuminate\\Database\\Eloquent\\Relations\\Pivot,string\>\:\:paginate\(\) invoked with 5 parameters, 0\-4 required\.$#'
 			identifier: arguments.count
 			count: 1
@@ -397,12 +391,6 @@ parameters:
 			path: src/CachedMorphToMany.php
 
 		-
-			message: '#^Method GeneaLabs\\LaravelModelCaching\\CachedMorphToMany\:\:attach\(\) with return type void returns mixed but should not return anything\.$#'
-			identifier: return.void
-			count: 1
-			path: src/CachedMorphToMany.php
-
-		-
 			message: '#^Method Illuminate\\Database\\Eloquent\\Relations\\BelongsToMany\<Illuminate\\Database\\Eloquent\\Model,Illuminate\\Database\\Eloquent\\Model,Illuminate\\Database\\Eloquent\\Relations\\MorphPivot,string\>\:\:paginate\(\) invoked with 5 parameters, 0\-4 required\.$#'
 			identifier: arguments.count
 			count: 1
@@ -667,12 +655,6 @@ parameters:
 			path: tests/Fixtures/AuthorBeginsWithScoped.php
 
 		-
-			message: '#^Access to an undefined property \$this\(GeneaLabs\\LaravelModelCaching\\Tests\\Fixtures\\AuthorDelegatingToModelCaching\)\:\:\$model\.$#'
-			identifier: property.notFound
-			count: 2
-			path: tests/Fixtures/AuthorDelegatingToModelCaching.php
-
-		-
 			message: '#^Access to an undefined property GeneaLabs\\LaravelModelCaching\\Tests\\Fixtures\\AuthorDelegatingToModelCaching\:\:\$cacheCooldownSeconds\.$#'
 			identifier: property.notFound
 			count: 2
@@ -705,7 +687,7 @@ parameters:
 		-
 			message: '#^Call to an undefined method Illuminate\\Database\\Eloquent\\Model\:\:flushCache\(\)\.$#'
 			identifier: method.notFound
-			count: 3
+			count: 2
 			path: tests/Fixtures/AuthorDelegatingToModelCaching.php
 
 		-
@@ -871,12 +853,6 @@ parameters:
 			path: tests/Fixtures/AuthorExtendingGenerated.php
 
 		-
-			message: '#^Access to an undefined property \$this\(GeneaLabs\\LaravelModelCaching\\Tests\\Fixtures\\AuthorWithBaseBuilderTrait\)\:\:\$model\.$#'
-			identifier: property.notFound
-			count: 2
-			path: tests/Fixtures/AuthorWithBaseBuilderTrait.php
-
-		-
 			message: '#^Access to an undefined property GeneaLabs\\LaravelModelCaching\\Tests\\Fixtures\\AuthorWithBaseBuilderTrait\:\:\$cacheCooldownSeconds\.$#'
 			identifier: property.notFound
 			count: 2
@@ -909,7 +885,7 @@ parameters:
 		-
 			message: '#^Call to an undefined method Illuminate\\Database\\Eloquent\\Model\:\:flushCache\(\)\.$#'
 			identifier: method.notFound
-			count: 3
+			count: 2
 			path: tests/Fixtures/AuthorWithBaseBuilderTrait.php
 
 		-
@@ -2429,12 +2405,6 @@ parameters:
 			identifier: argument.type
 			count: 1
 			path: tests/Fixtures/Image.php
-
-		-
-			message: '#^Access to an undefined property GeneaLabs\\LaravelModelCaching\\Tests\\Fixtures\\Author\:\:\$email\.$#'
-			identifier: property.notFound
-			count: 2
-			path: tests/Fixtures/Observers/AuthorObserver.php
 
 		-
 			message: '#^Access to an undefined property \$this\(GeneaLabs\\LaravelModelCaching\\Tests\\Fixtures\\Post\)\:\:\$model\.$#'
